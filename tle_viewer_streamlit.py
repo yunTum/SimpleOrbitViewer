@@ -180,6 +180,17 @@ def parse_tle_text(tle_text):
     
     return tle_data
 
+def load_tle_from_file(file_path="tle_cache.txt"):
+    """ローカルファイルからTLEデータを読み込む"""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            tle_text = f.read()
+        tle_data = parse_tle_text(tle_text)
+        return tle_data
+    except Exception as e:
+        st.error(f"ローカルTLEファイルの読み込みに失敗しました: {e}")
+        return None
+
 def create_orbit_plot(tle_data, end_time, sat_num=5):
     """軌道プロットを作成"""
     earth_radius = 6378.0  # 地球半径 [km]
@@ -256,6 +267,17 @@ def create_orbit_plot(tle_data, end_time, sat_num=5):
     
     return fig
 
+# --- 追加: 軌道長半径計算関数 ---
+def calculate_semi_major_axis(mean_motion):
+    # mean_motion: [rev/day] -> [rad/s]に変換して軌道長半径aを計算
+    # 公式: a = (mu / (n^2))^(1/3)
+    # mu = GM = 3.986004418e14 [m^3/s^2]
+    # n = mean_motion * 2pi / 86400 [rad/s]
+    mu = 3.986004418e14
+    n = mean_motion * 2 * np.pi / 86400
+    a = (mu / (n ** 2)) ** (1/3) / 1000  # [km]
+    return a
+
 def main():
     st.set_page_config(page_title="TLE Viewer", layout="wide")
     
@@ -268,7 +290,7 @@ def main():
         # データソース選択
         data_source = st.radio(
             "データソース",
-            ["オンライン取得", "手動入力"],
+            ["TELファイル", "手動入力"],
             help="TLEデータの取得方法を選択してください"
         )
         
@@ -292,7 +314,7 @@ def main():
                         st.success("データが正常に読み込まれました")
         
         # 手動入力の場合
-        else:
+        elif data_source == "手動入力":
             st.subheader("TLEデータ入力")
             tle_text = st.text_area(
                 "TLEデータを入力してください",
@@ -312,6 +334,25 @@ def main():
                         st.error("有効なTLEデータが見つかりませんでした")
                 else:
                     st.error("TLEデータを入力してください")
+        
+        # ローカルファイルの場合
+        elif data_source == "TELファイル":
+            st.subheader("TELファイル読み込み")
+            group_options = {
+                "過去30日間": "./tle_data/tle_last30days.txt",
+                "気象衛星": "./tle_data/tle_weather.txt",
+                "科学衛星": "./tle_data/tle_science.txt"
+            }
+            selected_group = st.selectbox("衛星グループ", list(group_options.keys()))
+            file_path = group_options[selected_group]
+            if st.button("TLEデータを読み込む"):
+                tle_data = load_tle_from_file(file_path)
+                if tle_data:
+                    st.session_state.tle_data = tle_data
+                    st.session_state.data_loaded = True
+                    st.success(f"{len(tle_data)}個の衛星データを読み込みました")
+                else:
+                    st.error("有効なTLEデータが見つかりませんでした")
         
         # 計算パラメータ
         st.subheader("計算パラメータ")
@@ -356,32 +397,59 @@ def main():
                 st.rerun()
     
     # メインエリア
-    if hasattr(st.session_state, 'calculate') and st.session_state.calculate:
-        if hasattr(st.session_state, 'tle_data') and st.session_state.tle_data:
-            with st.spinner("軌道計算中..."):
-                fig = create_orbit_plot(st.session_state.tle_data, end_time, sat_num)
-                st.plotly_chart(fig, use_container_width=True, height=800)
-        else:
-            st.error("TLEデータが読み込まれていません")
+    if hasattr(st.session_state, 'tle_data') and st.session_state.tle_data:
+        tabs = st.tabs(["プロット", "衛星リスト"])
+        with tabs[1]:
+            st.subheader("衛星名一覧")
+            parsed_table = []
+            for tle in st.session_state.tle_data:
+                orbit_elements = parse_tle(tle)
+                if orbit_elements:
+                    parsed_table.append({
+                        '衛星名': orbit_elements['name'][:29],
+                        '軌道長半径a': f"{calculate_semi_major_axis(orbit_elements['mean_motion']):.2f} km",
+                        '軌道傾斜角i': f"{orbit_elements['inclination']:.4f}°",
+                        '昇交点赤経Ω': f"{orbit_elements['raan']:.4f}°",
+                        '離心率e': f"{orbit_elements['eccentricity']:.7f}",
+                        '近地点引数ω': f"{orbit_elements['arg_perigee']:.4f}°",
+                        '平均近点角M': f"{orbit_elements['mean_anomaly']:.4f}°",
+                        '平均運動n': f"{orbit_elements['mean_motion']:.8f}°/s",
+                        '周期T': f"{orbit_elements['period']/3600:.4f}h"
+                    })
+            if parsed_table:
+                st.dataframe(pd.DataFrame(parsed_table))
+            else:
+                st.info("パースできるデータがありません。")
+        with tabs[0]:
+            if hasattr(st.session_state, 'calculate') and st.session_state.calculate:
+                with st.spinner("軌道計算中..."):
+                    fig = create_orbit_plot(st.session_state.tle_data, end_time, sat_num)
+                    st.plotly_chart(fig, use_container_width=True, height=800)
+            else:
+                st.info("👈 サイドバーからTLEデータを読み込んで計算を開始してください")
     else:
         st.info("👈 サイドバーからTLEデータを読み込んで計算を開始してください")
         
         # 使用例を表示
-        with st.expander("使用例"):
-            st.markdown("""
-            ### TLEデータの入力例
-            ```
-            ISS (ZARYA)
-            1 25544U 98067A   21001.50000000  .00001448  00000-0  33508-4 0  9991
-            2 25544  51.6435 114.6994 0003448 202.4638 157.5534 15.48905396276519
-            ```
-            
-            ### 手順
-            1. サイドバーでデータソースを選択
-            2. TLEデータを取得または入力
-            3. 計算パラメータを設定
-            4. 「計算開始」ボタンをクリック
-            """)
+        st.markdown("""
+        ### TLEデータの入力例
+        ```
+        ISS (ZARYA)
+        1 25544U 98067A   21001.50000000  .00001448  00000-0  33508-4 0  9991
+        2 25544  51.6435 114.6994 0003448 202.4638 157.5534 15.48905396276519
+        ```
+        
+        TLEデータ
+        <https://celestrak.org/NORAD/elements/>
+        
+        ### 手順
+        1. サイドバーでデータソースを選択
+        2. TLEデータを取得または入力
+        3. 計算パラメータを設定
+        4. 「計算開始」ボタンをクリック
+        
+        ※ニュートン法で軌道を計算
+        """)
 
 if __name__ == "__main__":
     main() 
