@@ -336,8 +336,8 @@ def main():
                     st.error("TLEデータを入力してください")
         
         # ローカルファイルの場合
-        elif data_source == "TELファイル":
-            st.subheader("TELファイル読み込み")
+        elif data_source == "TLEファイル":
+            st.subheader("TLEファイル読み込み")
             group_options = {
                 "過去30日間": "./tle_data/tle_last30days.txt",
                 "気象衛星": "./tle_data/tle_weather.txt",
